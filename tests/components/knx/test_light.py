@@ -1,15 +1,11 @@
-"""Test knx light."""
+"""Test KNX light."""
 
 from homeassistant.components.knx import KNX_ADDRESS, SupportedPlatforms
 from homeassistant.components.knx.schema import LightSchema
 from homeassistant.const import CONF_NAME
 
-from . import setup_knx_integration
 
-from tests.components.knx.conftest import KNXIPMock
-
-
-async def test_light_brightness(hass, knx_ip_interface_mock: KNXIPMock):
+async def test_light_brightness(hass, knx):
     """Test that a turn_on with unsupported attribute turns a light on."""
     name_onoff = "knx_no_brightness"
     name_brightness = "knx_with_brightness"
@@ -24,12 +20,10 @@ async def test_light_brightness(hass, knx_ip_interface_mock: KNXIPMock):
     ga_onoff = "1/1/8"
     ga_brightness = "1/1/10"
     ga_color = "1/1/12"
-    ga_white_onoff = "1/1/13"
-    ga_white = "1/1/14"
+    ga_rgbw_onoff = "1/1/13"
+    ga_rgbw = "1/1/14"
     ga_colortemp = "1/1/16"
-    await setup_knx_integration(
-        hass,
-        knx_ip_interface_mock,
+    await knx.setup_integration(
         {
             SupportedPlatforms.LIGHT.value: [
                 {
@@ -48,8 +42,8 @@ async def test_light_brightness(hass, knx_ip_interface_mock: KNXIPMock):
                 },
                 {
                     CONF_NAME: name_white,
-                    KNX_ADDRESS: ga_white_onoff,
-                    LightSchema.CONF_RGBW_ADDRESS: ga_white,
+                    KNX_ADDRESS: ga_rgbw_onoff,
+                    LightSchema.CONF_RGBW_ADDRESS: ga_rgbw,
                 },
                 {
                     CONF_NAME: name_colortemp,
@@ -62,37 +56,34 @@ async def test_light_brightness(hass, knx_ip_interface_mock: KNXIPMock):
     # check count of defined lights
     assert len(hass.states.async_all()) == 5
 
-    # Turn on/off simple lamp
-    knx_ip_interface_mock.reset_mock()
+    # Turn on simple lamp
     await hass.services.async_call(
         "light", "turn_on", {"entity_id": entity_onoff}, blocking=True
     )
+    await knx.assert_write(ga_onoff, True)
+    # Turn off simple lamp
     await hass.services.async_call(
         "light", "turn_off", {"entity_id": entity_onoff}, blocking=True
     )
-    knx_ip_interface_mock.assert_telegrams_gas([ga_onoff, ga_onoff], "switch on/off")
+    await knx.assert_write(ga_onoff, False)
 
-    for entity, attr, value, ga in [
-        [entity_brightness, "brightness", 100, ga_brightness],
-        [entity_color, "color_name", "blue", ga_color],
-        [
-            entity_white,
-            "white_value",
-            88,
-            ga_white_onoff,
-        ],  # white value is removed because of light supports rgb
-        [entity_colortemp, "color_temp", 88, ga_colortemp],
+    for entity, attr, value, ga, payload in [
+        [entity_brightness, "brightness", 100, ga_brightness, (100,)],
+        [entity_color, "color_name", "blue", ga_color, (0x00, 0x00, 0xFF)],
+        # white value is removed because of light supports rgb
+        [entity_white, "white_value", 88, ga_rgbw_onoff, True],
+        [entity_colortemp, "color_temp", 96, ga_colortemp, (23, 112)],
     ]:
         # Turn on with specific attribute on lamp which supports specific attribute
         # Only the specific telegram is send; this implicitly switches the lamp on
-        knx_ip_interface_mock.reset_mock()
+        await knx.assert_telegram_count(0)
         await hass.services.async_call(
             "light",
             "turn_on",
             {"entity_id": entity, attr: value},
             blocking=True,
         )
-        knx_ip_interface_mock.assert_telegrams_gas([ga], attr)
+        await knx.assert_write(ga, payload)
 
     for attr, value in [
         ["brightness", 100],
@@ -101,40 +92,29 @@ async def test_light_brightness(hass, knx_ip_interface_mock: KNXIPMock):
         ["color_temp", 88],
     ]:
         # Turn on with specific attribute on simple lamp
-        knx_ip_interface_mock.reset_mock()
+        await knx.assert_telegram_count(0)
         await hass.services.async_call(
             "light",
             "turn_on",
             {"entity_id": entity_onoff, attr: value},
             blocking=True,
         )
+        await knx.assert_write(ga_onoff, True)
         await hass.services.async_call(
             "light", "turn_off", {"entity_id": entity_onoff}, blocking=True
         )
-        assert knx_ip_interface_mock.send_telegram.call_count == 2, (
-            "Expected telegrams for switch on/off while using " + attr
-        )
-        assert (
-            str(
-                knx_ip_interface_mock.send_telegram.call_args.args[
-                    0
-                ].destination_address
-            )
-            == ga_onoff
-        ), ("Expected telegram for on/off address with attribute " + attr)
+        await knx.assert_write(ga_onoff, False)
 
 
-async def test_light_multi_change(hass, knx_ip_interface_mock: KNXIPMock):
+async def test_light_multi_change(hass, knx):
     """Test that a change on an attribute changes only that attribute."""
     ga_onoff = "1/1/8"
     ga_onoff2 = "1/1/9"
     ga_brightness = "1/1/10"
     ga_color = "1/1/12"
-    ga_white = "1/1/14"
+    ga_rgbw = "1/1/14"
     ga_colortemp = "1/1/16"
-    await setup_knx_integration(
-        hass,
-        knx_ip_interface_mock,
+    await knx.setup_integration(
         {
             SupportedPlatforms.LIGHT.value: [
                 {
@@ -148,7 +128,7 @@ async def test_light_multi_change(hass, knx_ip_interface_mock: KNXIPMock):
                     CONF_NAME: "lamp2",
                     KNX_ADDRESS: ga_onoff2,
                     LightSchema.CONF_BRIGHTNESS_ADDRESS: ga_brightness,
-                    LightSchema.CONF_RGBW_ADDRESS: ga_white,
+                    LightSchema.CONF_RGBW_ADDRESS: ga_rgbw,
                     LightSchema.CONF_COLOR_TEMP_ADDRESS: ga_colortemp,
                 },
             ]
@@ -157,44 +137,42 @@ async def test_light_multi_change(hass, knx_ip_interface_mock: KNXIPMock):
     # check count of defined lights
     assert len(hass.states.async_all()) == 2
 
-    for lamp, ga_c in [["lamp1", ga_color], ["lamp2", ga_white]]:
+    for entity, test_ga, test_payload in [
+        ["lamp1", ga_color, (0, 0, 255)],
+        ["lamp2", ga_rgbw, (0, 0, 255, 0, 0, 15)],
+    ]:
         # Turn on lamp by setting color
-        knx_ip_interface_mock.reset_mock()
+        await knx.assert_telegram_count(0)
         await hass.services.async_call(
             "light",
             "turn_on",
-            {"entity_id": f"light.{lamp}", "color_name": "blue"},
+            {"entity_id": f"light.{entity}", "color_name": "blue"},
             blocking=True,
         )
-        knx_ip_interface_mock.assert_telegrams_gas([ga_c], f"color for {lamp}")
+        await knx.assert_write(test_ga, test_payload)
 
         # Change brightness
-        knx_ip_interface_mock.reset_mock()
         await hass.services.async_call(
             "light",
             "turn_on",
-            {"entity_id": f"light.{lamp}", "brightness": 88},
+            {"entity_id": f"light.{entity}", "brightness": 75},
             blocking=True,
         )
-        knx_ip_interface_mock.assert_telegrams_gas(
-            [ga_brightness], f"brightness for {lamp}"
-        )
 
-    for attribute, value, ga in [
-        ["color_name", "red", ga_color],
-        [
-            "color_temp",
-            77,
-            ga_color,
-        ],  # color_temp change is performed via color address
-        ["brightness", 55, ga_brightness],
+        await knx.assert_write(ga_brightness, (75,))
+
+    for attribute, value, test_ga, test_payload in [
+        ["color_name", "red", ga_color, (0xFF, 0x00, 0x00)],
+        # color_temp is converted to color address in color_mode rgb
+        ["color_temp", 77, ga_color, (187, 209, 255)],
+        ["brightness", 55, ga_brightness, (55,)],
     ]:
         # Change attribute
-        knx_ip_interface_mock.reset_mock()
+        await knx.assert_telegram_count(0)
         await hass.services.async_call(
             "light",
             "turn_on",
             {"entity_id": "light.lamp1", attribute: value},
             blocking=True,
         )
-        knx_ip_interface_mock.assert_telegrams_gas([ga], attribute)
+        await knx.assert_write(test_ga, test_payload)
